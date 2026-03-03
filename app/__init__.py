@@ -1,0 +1,2 @@
+"""Wazuh log analysis service."""
+

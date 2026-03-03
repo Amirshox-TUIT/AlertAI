@@ -1,6 +1,10 @@
 import httpx
 
 
+class TelegramApiError(RuntimeError):
+    pass
+
+
 class TelegramAlertClient:
     def __init__(self, bot_token: str | None, chat_id: str | None):
         self.bot_token = bot_token
@@ -18,9 +22,24 @@ class TelegramAlertClient:
         payload = {
             "chat_id": self.chat_id,
             "text": text,
-            "parse_mode": "HTML"
+            "parse_mode": "HTML",
         }
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(url, json=payload)
-            response.raise_for_status()
+            if response.is_error:
+                description = _extract_telegram_error(response)
+                raise TelegramApiError(
+                    f"Telegram API xatosi ({response.status_code}): {description}"
+                )
+
+
+def _extract_telegram_error(response: httpx.Response) -> str:
+    try:
+        payload = response.json()
+    except ValueError:
+        return response.text
+
+    if isinstance(payload, dict) and payload.get("description"):
+        return str(payload["description"])
+    return response.text

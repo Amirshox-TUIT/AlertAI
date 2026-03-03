@@ -1,5 +1,6 @@
 import logging
-from dataclasses import asdict
+from html import escape
+
 from app.analyzer import SklearnLogAnalyzer
 from app.config import Settings
 from app.log_parser import parse_lines, read_last_lines
@@ -7,6 +8,10 @@ from app.schemas import AnalyzeResponse, SuspiciousItem
 from app.telegram_client import TelegramAlertClient
 
 logger = logging.getLogger(__name__)
+
+_TELEGRAM_MAX_CHARS = 4096
+_MAX_SUSPICIOUS_ITEMS = 20
+_TOP_ITEMS_IN_ALERT = 5
 
 
 class LogAnalysisService:
@@ -22,14 +27,16 @@ class LogAnalysisService:
         )
 
     async def analyze_file(
-            self,
-            file_path: str | None = None,
-            max_lines: int | None = None,
-            send_telegram: bool | None = None,
+        self,
+        file_path: str | None = None,
+        max_lines: int | None = None,
+        send_telegram: bool | None = None,
     ) -> AnalyzeResponse:
         path = file_path or self.settings.wazuh_log_path
         max_lines_value = max_lines or self.settings.default_max_lines
-        should_send = self.settings.send_telegram_by_default if send_telegram is None else send_telegram
+        should_send = (
+            self.settings.send_telegram_by_default if send_telegram is None else send_telegram
+        )
 
         lines = read_last_lines(path, max_lines=max_lines_value)
         events = parse_lines(lines)
@@ -43,16 +50,24 @@ class LogAnalysisService:
                 reasons=item.reasons,
                 anomaly_score=round(item.anomaly_score, 4),
                 rule_level=item.event.rule_level,
-                metadata=asdict(item.event).get("metadata", {}),
+                # Access metadata directly — no asdict() needed
+                metadata=item.event.metadata,
             )
-            for item in analyzed_items[:20]
+            for item in analyzed_items[:_MAX_SUSPICIOUS_ITEMS]
         ]
 
         telegram_sent = False
         telegram_error: str | None = None
 
         if should_send and suspicious_items:
-            message = self._format_alert(path=path, total_logs=len(events), items=suspicious_items)
+            message = self._format_alert(
+                path=path,
+                total_logs=len(events),
+                items=suspicious_items,
+            )
+            if len(message) > _TELEGRAM_MAX_CHARS:
+                message = message[: _TELEGRAM_MAX_CHARS - 4] + "\n..."
+
             try:
                 await self.telegram.send_message(message)
                 telegram_sent = True
@@ -69,30 +84,32 @@ class LogAnalysisService:
         )
 
     def _format_alert(self, path: str, total_logs: int, items: list[SuspiciousItem]) -> str:
-        """Telegram uchun chiroyli HTML formatida xabar yasaymiz"""
-        top = items[:5]  # Faqat eng xavfli 5 tasini yuboramiz (Telegram xabari juda uzun bo'lib ketmasligi uchun)
+        top = items[:_TOP_ITEMS_IN_ALERT]
 
         lines = [
-            "🚨 <b>Wazuh AI Hujum Xabarnomasi</b> 🚨",
-            f"📁 <b>Fayl:</b> <code>{path}</code>",
-            f"📊 <b>Jami tahlil qilingan loglar:</b> {total_logs}",
-            f"⚠️ <b>Shubhali holatlar:</b> {len(items)}",
+            "<b>Wazuh AI Hujum Xabarnomasi</b>",
+            f"<b>Fayl:</b> <code>{escape(path, quote=False)}</code>",
+            f"<b>Jami tahlil qilingan loglar:</b> {total_logs}",
+            f"<b>Shubhali holatlar:</b> {len(items)}",
             "",
-            "🔴 <b>Eng xavfli holatlar (TOP 5):</b>",
-            ""
+            f"<b>Eng xavfli holatlar (TOP {_TOP_ITEMS_IN_ALERT}):</b>",
+            "",
         ]
 
         for idx, item in enumerate(top, start=1):
-            time_str = item.timestamp.strftime("%Y-%m-%d %H:%M:%S") if item.timestamp else "Noma'lum vaqt"
-            reasons_str = ", ".join(item.reasons)
-            # Log xabaridan HTML teglarni tozalaymiz (agar bo'lsa) va xavfsiz ko'rinishga keltiramiz
-            safe_msg = item.message.replace("<", "&lt;").replace(">", "&gt;").replace("\n", " ")[:150]
+            time_str = (
+                item.timestamp.strftime("%Y-%m-%d %H:%M:%S")
+                if item.timestamp
+                else "Nomalum vaqt"
+            )
+            reasons_str = escape(", ".join(item.reasons), quote=False)
+            safe_msg = escape(item.message.replace("\n", " "), quote=False)[:150]
 
             lines.append(f"<b>{idx}. Vaqt:</b> {time_str}")
             lines.append(f"<b>Sabablar:</b> {reasons_str}")
             if item.rule_level:
                 lines.append(f"<b>Xavflilik darajasi (Rule Level):</b> {item.rule_level}")
             lines.append(f"<b>Log xabari:</b> <code>{safe_msg}...</code>")
-            lines.append("—" * 20)
+            lines.append("—" * 15)
 
         return "\n".join(lines)

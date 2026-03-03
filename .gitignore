@@ -80,3 +80,4 @@ venv.bak/
 .DS_Store
 Thumbs.db
 alert.json
+app/test_api.py

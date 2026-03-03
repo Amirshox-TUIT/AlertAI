@@ -5,6 +5,9 @@ from sklearn.feature_extraction.text import HashingVectorizer
 
 from app.log_parser import LogEvent
 
+REASON_ML_ANOMALY = "ML model anomaliya topdi"
+REASON_HIGH_RULE_LEVEL = "Wazuh rule level yuqori: {level}"
+REASON_SUSPICIOUS_KEYWORDS = "Shubhali kalit so'zlar: {keywords}"
 
 SUSPICIOUS_KEYWORDS = (
     "failed",
@@ -18,6 +21,9 @@ SUSPICIOUS_KEYWORDS = (
     "suspicious",
     "root access",
 )
+
+_MIN_SAMPLES_FOR_MODEL = 20
+_TELEGRAM_MAX_CHARS = 4096
 
 
 @dataclass(slots=True)
@@ -38,6 +44,21 @@ class SklearnLogAnalyzer:
             norm="l2",
             lowercase=True,
         )
+        self._model: IsolationForest | None = None
+        self._model_trained_on: int = 0
+
+    def _get_or_fit_model(self, features, n_samples: int) -> IsolationForest:
+        if self._model is None or self._model_trained_on != n_samples:
+            model = IsolationForest(
+                n_estimators=200,
+                contamination=self.contamination,
+                random_state=42,
+                n_jobs=-1,
+            )
+            model.fit(features)
+            self._model = model
+            self._model_trained_on = n_samples
+        return self._model
 
     def analyze(self, events: list[LogEvent]) -> list[AnalyzedLog]:
         if not events:
@@ -48,15 +69,9 @@ class SklearnLogAnalyzer:
         model_predictions = [1] * len(events)
         model_scores = [0.0] * len(events)
 
-        # IsolationForest needs enough examples to separate normal/anomaly points.
-        if len(events) >= 20:
-            model = IsolationForest(
-                n_estimators=200,
-                contamination=self.contamination,
-                random_state=42,
-                n_jobs=-1,
-            )
-            model_predictions = model.fit_predict(features).tolist()
+        if len(events) >= _MIN_SAMPLES_FOR_MODEL:
+            model = self._get_or_fit_model(features, n_samples=len(events))
+            model_predictions = model.predict(features).tolist()
             model_scores = (-model.decision_function(features)).tolist()
 
         analyzed: list[AnalyzedLog] = []
@@ -65,16 +80,16 @@ class SklearnLogAnalyzer:
             score = float(model_scores[index])
 
             if model_predictions[index] == -1:
-                reasons.append("ML model anomaliya topdi")
+                reasons.append(REASON_ML_ANOMALY)
 
             if event.rule_level is not None and event.rule_level >= self.min_rule_level_alert:
-                reasons.append(f"Wazuh rule level yuqori: {event.rule_level}")
+                reasons.append(REASON_HIGH_RULE_LEVEL.format(level=event.rule_level))
                 score += event.rule_level / 20
 
             lower_msg = event.message.lower()
             matched_keywords = [kw for kw in SUSPICIOUS_KEYWORDS if kw in lower_msg]
             if matched_keywords:
-                reasons.append(f"Shubhali kalit so'zlar: {', '.join(matched_keywords)}")
+                reasons.append(REASON_SUSPICIOUS_KEYWORDS.format(keywords=", ".join(matched_keywords)))
                 score += min(1.0, 0.2 * len(matched_keywords))
 
             if reasons:
@@ -82,4 +97,3 @@ class SklearnLogAnalyzer:
 
         analyzed.sort(key=lambda item: item.anomaly_score, reverse=True)
         return analyzed
-

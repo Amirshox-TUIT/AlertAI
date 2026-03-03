@@ -31,6 +31,10 @@ def read_last_lines(file_path: str, max_lines: int) -> list[str]:
     if not path.exists() or not path.is_file():
         raise FileNotFoundError(f"Log file not found: {file_path}")
 
+    json_lines = _read_json_payload_if_any(path=path, max_lines=max_lines)
+    if json_lines is not None:
+        return json_lines
+
     buffer: deque[str] = deque(maxlen=max_lines)
     with path.open("r", encoding="utf-8", errors="ignore") as file:
         for line in file:
@@ -38,6 +42,36 @@ def read_last_lines(file_path: str, max_lines: int) -> list[str]:
             if stripped:
                 buffer.append(stripped)
     return list(buffer)
+
+
+def _read_json_payload_if_any(path: Path, max_lines: int) -> list[str] | None:
+    # Some exported alert files are JSON arrays, not NDJSON; parse those directly.
+    with path.open("r", encoding="utf-8", errors="ignore") as file:
+        probe = file.read(2048)
+
+    first_non_space = probe.lstrip()
+    if not first_non_space:
+        return []
+    if not first_non_space.startswith("["):
+        return None
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, list):
+        return None
+
+    items = payload[-max_lines:]
+    normalized_lines: list[str] = []
+    for item in items:
+        if isinstance(item, (dict, list)):
+            normalized_lines.append(json.dumps(item, ensure_ascii=False))
+        elif item is not None:
+            normalized_lines.append(str(item))
+
+    return normalized_lines
 
 
 def parse_lines(raw_lines: list[str]) -> list[LogEvent]:
@@ -129,4 +163,3 @@ def _safe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-

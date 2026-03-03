@@ -1,5 +1,4 @@
 from functools import lru_cache
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,11 +13,10 @@ class Settings(BaseSettings):
     min_rule_level_alert: int = 10
     send_telegram_by_default: bool = True
 
-    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN")
-    telegram_chat_id: str | None = os.getenv("TELEGRAM_CHAT_ID")
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-

@@ -1,0 +1,15 @@
+{
+  "timestamp": "2023-10-27T10:00:01.000+0000",
+  "rule": {"level": 3, "description": "User logged in"},
+  "full_log": "User admin logged in from 192.168.1.1"
+}
+{
+  "timestamp": "2023-10-27T10:05:01.000+0000",
+  "rule": {"level": 12, "description": "Bruteforce attack detected"},
+  "full_log": "Multiple failed login attempts for user root - bruteforce"
+}
+{
+  "timestamp": "2023-10-27T10:10:01.000+0000",
+  "rule": {"level": 15, "description": "SQL Injection attempt"},
+  "full_log": "GET /index.php?id=1' OR '1'='1' -- detected suspicious SQL syntax"
+}
